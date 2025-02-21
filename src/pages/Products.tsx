@@ -96,21 +96,23 @@ const Products = () => {
           Authorization: `Bearer ${localStorage.getItem('token')}`,
         },
       });
-
+  
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
-
+  
       const data: any = await response.json();
       console.log("Products API Response:", data);
-
+  
       const productData = data.products || data.data || data || [];
       if (!Array.isArray(productData)) {
         console.error("Products data is not an array:", productData);
         setProducts([]);
       } else {
-        setProducts(productData);
-        console.log("Updated products state:", productData);
+        // Filter out null or undefined entries and ensure each product has an _id
+        const validProducts = productData.filter((product: Product) => product && product._id);
+        setProducts(validProducts);
+        console.log("Updated products state:", validProducts);
       }
     } catch (error) {
       console.error('Fetch products error:', error);
@@ -142,7 +144,7 @@ const Products = () => {
         throw new Error("Categories data is not an array");
       }
       setCategories(categoryData);
-      console.log("Fetched Categories:", categoryData.map((cat: Category) => ({ _id: cat._id, name: cat.name }))); // Simplified log
+      console.log("Fetched Categories:", categoryData.map((cat: Category) => ({ _id: cat._id, name: cat.name })));
     } catch (error) {
       console.error('Fetch categories error:', error);
       toast.error(error.message || "Failed to load categories");
@@ -248,15 +250,16 @@ const Products = () => {
       formData.append('price', newProduct.price?.toString() || '0');
       if (newProduct.salePrice !== undefined) formData.append('salePrice', newProduct.salePrice.toString());
       formData.append('stock', newProduct.stock?.toString() || '0');
-      formData.append('category', categoryId);
-      if (subcategoryId) formData.append('subcategory', subcategoryId);
+      formData.append('categoryId', categoryId);
+      if (subcategoryId) formData.append('subcategoryId', subcategoryId);
       formData.append('sku', newProduct.sku || '');
       formData.append('description', newProduct.description || '');
-      formData.append('specification', newProduct.specification || '');
+      formData.append('specifications', newProduct.specification || '');
 
       newImages.thumbnails.forEach((file, index) => {
         formData.append(`thumbnails[${index}]`, file);
       });
+
       newImages.gallery.forEach((file, index) => {
         formData.append(`gallery[${index}]`, file);
       });
@@ -320,38 +323,36 @@ const Products = () => {
 
   const handleEditProduct = async () => {
     if (!editingProduct) return;
-  
+
     const errors = validateProduct(editingProduct);
     if (errors.length > 0) {
       errors.forEach(error => toast.error(error));
       return;
     }
-  
+
     setIsSubmitting(true);
     try {
       const formData = new FormData();
-  
-      // Include all fields in the FormData
+
       formData.append('name', editingProduct.name || '');
       formData.append('price', editingProduct.price.toString());
-      formData.append('saleprice', editingProduct.saleprice?.toString() || ''); // Ensure saleprice is included
+      formData.append('salePrice', editingProduct.salePrice?.toString() || '');
       formData.append('stock', editingProduct.stock.toString());
       formData.append('category', editingProduct.category || '');
       formData.append('subcategory', editingProduct.subcategory || '');
       formData.append('sku', editingProduct.sku || '');
       formData.append('description', editingProduct.description || '');
-      formData.append('specifications', editingProduct.specifications || ''); // Ensure specifications is included
-  
-      // Handle image uploads if any
+      formData.append('specifications', editingProduct.specification || '');
+
       editImages.thumbnails.forEach((file, index) => {
         formData.append(`thumbnails[${index}]`, file);
       });
       editImages.gallery.forEach((file, index) => {
         formData.append(`gallery[${index}]`, file);
       });
-  
+
       console.log("Edit Product FormData:", Object.fromEntries(formData));
-  
+
       const response = await fetch(`${baseurl}${routes.EDIT.replace(':id', editingProduct._id)}`, {
         method: 'PUT',
         headers: {
@@ -359,16 +360,22 @@ const Products = () => {
         },
         body: formData,
       });
-  
+
       if (!response.ok) {
         const errorData = await response.json();
         console.log("Edit Product Server Error:", errorData);
         throw new Error(errorData.error || `Failed to update product: ${response.statusText}`);
       }
-  
-      const updatedProduct = await response.json();
-      console.log("Update API Response:", updatedProduct);
-  
+
+      const { product: updatedProduct, updatedSubcategories } = await response.json();
+      console.log("Update API Response:", { updatedProduct, updatedSubcategories });
+
+      window.dispatchEvent(
+        new CustomEvent('productUpdated', {
+          detail: { updatedSubcategories },
+        })
+      );
+
       await fetchProducts();
       setIsEditProductOpen(false);
       setEditingProduct(null);
@@ -387,29 +394,47 @@ const Products = () => {
   };
 
   const handleDeleteConfirm = async () => {
-    if (!productToDelete) return;
+  if (!productToDelete) return;
 
-    setIsSubmitting(true);
-    try {
-      const response = await fetch(`${baseurl}${routes.REMOVE.replace(':id', productToDelete)}`, {
-        method: 'DELETE',
-        headers: {
-          Authorization: `Bearer ${localStorage.getItem('token')}`,
-        },
-      });
+  setIsSubmitting(true);
+  try {
+    const response = await fetch(`${baseurl}${routes.REMOVE.replace(':id', productToDelete)}`, {
+      method: 'DELETE',
+      headers: {
+        Authorization: `Bearer ${localStorage.getItem('token')}`,
+      },
+    });
 
-      if (!response.ok) throw new Error('Failed to delete product');
-
-      await fetchProducts();
-      toast.success("Product deleted successfully");
-    } catch (error: any) {
-      console.error('Delete product error:', error);
-      toast.error(error.message || "Failed to delete product");
-    } finally {
-      setProductToDelete(null);
-      setIsSubmitting(false);
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.error || `Failed to delete product: ${response.statusText}`);
     }
-  };
+
+    const result = await response.json().catch(() => ({}));
+    console.log("Delete Product Response:", result);
+
+    await fetchProducts();
+    toast.success("Product deleted successfully");
+
+    // Dispatch event to notify Categories component
+    window.dispatchEvent(new Event('productDeleted'));
+
+    if (result.updatedSubcategories) {
+      window.dispatchEvent(
+        new CustomEvent('productUpdated', {
+          detail: { updatedSubcategories: result.updatedSubcategories },
+        })
+      );
+    }
+  } catch (error: any) {
+    console.error('Delete product error:', error);
+    toast.error(error.message || "Failed to delete product");
+    await fetchProducts();
+  } finally {
+    setProductToDelete(null);
+    setIsSubmitting(false);
+  }
+};
 
   const editorConfig = {
     height: 300,
@@ -511,8 +536,8 @@ const Products = () => {
                       <Input
                         id="salePrice"
                         type="number"
-                        value={newProduct.salePrice || ""}
-                        onChange={(e) => setNewProduct({ ...newProduct, salePrice: parseFloat(e.target.value) })}
+                        value={newProduct.salePrice || 0}
+                        onChange={(e) => setNewProduct({ ...newProduct, salePrice: parseFloat(e.target.value) || 0 })}
                         placeholder="0.00"
                       />
                     </div>
@@ -660,8 +685,8 @@ const Products = () => {
                       <Input
                         id="edit-salePrice"
                         type="number"
-                        value={editingProduct.salePrice || ""}
-                        onChange={(e) => setEditingProduct({ ...editingProduct, salePrice: parseFloat(e.target.value) })}
+                        value={editingProduct.salePrice || 0}
+                        onChange={(e) => setEditingProduct({ ...editingProduct, salePrice: parseFloat(e.target.value) || 0 })}
                         placeholder="0.00"
                       />
                     </div>
@@ -735,23 +760,25 @@ const Products = () => {
         </Dialog>
 
         <AlertDialog open={productToDelete !== null} onOpenChange={() => setProductToDelete(null)}>
-          <AlertDialogContent>
-            <AlertDialogHeader>
-              <AlertDialogTitle>Delete Product</AlertDialogTitle>
-              <DialogDescription>Are you sure you want to delete this product? This action cannot be undone.</DialogDescription>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
-              <AlertDialogCancel disabled={isSubmitting}>Cancel</AlertDialogCancel>
-              <AlertDialogAction
-                onClick={handleDeleteConfirm}
-                className="bg-red-500 hover:bg-red-600"
-                disabled={isSubmitting}
-              >
-                {isSubmitting ? "Deleting..." : "Delete"}
-              </AlertDialogAction>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
+  <AlertDialogContent>
+    <AlertDialogHeader>
+      <AlertDialogTitle>Delete Product</AlertDialogTitle>
+      <AlertDialogDescription>
+        Are you sure you want to delete this product? This action cannot be undone.
+      </AlertDialogDescription>
+    </AlertDialogHeader>
+    <AlertDialogFooter>
+      <AlertDialogCancel disabled={isSubmitting}>Cancel</AlertDialogCancel>
+      <AlertDialogAction
+        onClick={handleDeleteConfirm}
+        className="bg-red-500 hover:bg-red-600"
+        disabled={isSubmitting}
+      >
+        {isSubmitting ? "Deleting..." : "Delete"}
+      </AlertDialogAction>
+    </AlertDialogFooter>
+  </AlertDialogContent>
+</AlertDialog>
 
         <div className="bg-white rounded-xl shadow-sm border border-gray-100">
           <div className="overflow-x-auto">
@@ -776,7 +803,7 @@ const Products = () => {
                       ))}
                     </tr>
                   ))
-                ) : !products || products.length === 0 ? (
+                ) : products.length === 0 ? (
                   <tr>
                     <td colSpan={6} className="px-6 py-4 text-center text-gray-500">
                       No products found
@@ -802,28 +829,34 @@ const Products = () => {
                       </td>
                       <td className="px-6 py-4">
                         <div>
-                          <span className="text-gray-600">{getCategoryNameById(typeof product.category === 'string' ? product.category : product.category._id)}</span>
+                          <span className="text-gray-600">
+                            {getCategoryNameById(typeof product.category === 'string' ? product.category : product.category._id)}
+                          </span>
                           {product.subcategory && (
-                            <span className="text-sm text-gray-500 block">{getSubcategoryNameById(typeof product.subcategory === 'string' ? product.subcategory : product.subcategory._id)}</span>
+                            <span className="text-sm text-gray-500 block">
+                              {getSubcategoryNameById(typeof product.subcategory === 'string' ? product.subcategory : product.subcategory._id)}
+                            </span>
                           )}
                         </div>
                       </td>
                       <td className="px-6 py-4">
                         <div>
-                          <span className="text-gray-900">${product.price.toFixed(2)}</span>
+                          <span className="text-gray-900">₹{product.price.toFixed(2)}</span>
                           {product.salePrice && (
-                            <span className="text-sm text-red-500 block">Sale: ${product.salePrice.toFixed(2)}</span>
+                            <span className="text-sm text-red-500 block">Sale: ₹{product.salePrice.toFixed(2)}</span>
                           )}
                         </div>
                       </td>
                       <td className="px-6 py-4 text-gray-600">{product.stock}</td>
                       <td className="px-6 py-4">
-                        <span className={cn(
-                          "px-3 py-1 rounded-full text-sm font-medium",
-                          getProductStatus(product.stock) === "In Stock"
-                            ? "bg-green-100 text-green-700"
-                            : "bg-red-100 text-red-700"
-                        )}>
+                        <span
+                          className={cn(
+                            "px-3 py-1 rounded-full text-sm font-medium",
+                            getProductStatus(product.stock) === "In Stock"
+                              ? "bg-green-100 text-green-700"
+                              : "bg-red-100 text-red-700"
+                          )}
+                        >
                           {getProductStatus(product.stock)}
                         </span>
                       </td>

@@ -22,14 +22,14 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
-import { baseurl, routes } from "../common/config"; // Import API routes
+import { baseurl, routes } from "../common/config";
 
 interface Subcategory {
-  _id: string; // Use _id for MongoDB
+  _id: string;
   name: string;
-  category: string; // Use category instead of parentCategory
-  productCount: number; // Use productCount instead of products
-  status: "Active" | "Inactive";
+  category: { _id: string; name: string }; // Updated to reflect populated object
+  productCount: number;
+  status: "active" | "inactive";
 }
 
 interface Category {
@@ -45,55 +45,74 @@ const Subcategories = () => {
   const [isAddOpen, setIsAddOpen] = useState(false);
   const [newSubcategory, setNewSubcategory] = useState({
     name: "",
-    categoryId: "", // Use categoryId instead of parentCategory
+    categoryId: "",
   });
-  const [categories, setCategories] = useState<Category[]>([]); // Store full category objects
+  const [categories, setCategories] = useState<Category[]>([]);
+  const [showCannotDelete, setShowCannotDelete] = useState(false);
+  const [cannotDeleteProductCount, setCannotDeleteProductCount] = useState<number>(0);
 
-  // Fetch subcategories and categories on component mount
+  const fetchSubcategories = async () => {
+    try {
+      const response = await fetch(`${baseurl}${routes.getAllSubcategories}`, {
+        headers: {
+          Authorization: `Bearer ${localStorage.getItem("token")}`,
+        },
+      });
+      if (!response.ok) throw new Error("Failed to fetch subcategories");
+      const data = await response.json();
+      console.log("Fetched subcategories:", data);
+      const normalizedSubcategories = data.map((sub: Subcategory) => ({
+        ...sub,
+        status: sub.status.toLowerCase() as "active" | "inactive",
+      }));
+      setSubcategories(normalizedSubcategories);
+    } catch (error) {
+      toast.error(error.message);
+      setSubcategories([]);
+    }
+  };
+
+  const fetchCategories = async () => {
+    try {
+      const response = await fetch(`${baseurl}${routes.getCategories}`, {
+        headers: {
+          Authorization: `Bearer ${localStorage.getItem("token")}`,
+        },
+      });
+      if (!response.ok) throw new Error("Failed to fetch categories");
+      const data = await response.json();
+      console.log("Fetched categories:", data);
+      setCategories(data);
+    } catch (error) {
+      toast.error(error.message);
+      setCategories([]);
+    }
+  };
+
   useEffect(() => {
     const fetchData = async () => {
-      try {
-        // Fetch subcategories
-        const subcategoriesResponse = await fetch(`${baseurl}${routes.getAllSubcategories}`, {
-          headers: {
-            Authorization: `Bearer ${localStorage.getItem("token")}`,
-          },
-        });
-        if (!subcategoriesResponse.ok) {
-          throw new Error("Failed to fetch subcategories");
-        }
-        const subcategoriesData = await subcategoriesResponse.json();
-        setSubcategories(subcategoriesData);
-
-        // Fetch categories
-        const categoriesResponse = await fetch(`${baseurl}${routes.getCategories}`, {
-          headers: {
-            Authorization: `Bearer ${localStorage.getItem("token")}`,
-          },
-        });
-        if (!categoriesResponse.ok) {
-          throw new Error("Failed to fetch categories");
-        }
-        const categoriesData = await categoriesResponse.json();
-        setCategories(categoriesData); // Store full category objects
-      } catch (error) {
-        toast.error(error.message);
-      }
+      await Promise.all([fetchCategories(), fetchSubcategories()]);
     };
 
     fetchData();
+
+    const handleProductDeleted = () => {
+      console.log("Product deleted event received, re-fetching subcategories");
+      fetchSubcategories();
+    };
+    window.addEventListener("productDeleted", handleProductDeleted);
+
+    return () => {
+      window.removeEventListener("productDeleted", handleProductDeleted);
+    };
   }, []);
 
-  // Toggle subcategory status
   const handleStatusToggle = async (id: string) => {
     try {
       const subcategory = subcategories.find((sub) => sub._id === id);
-      if (!subcategory) {
-        throw new Error("Subcategory not found");
-      }
+      if (!subcategory) throw new Error("Subcategory not found");
 
-      console.log(subcategory,"wffnkwnkkn")
-      const newStatus = subcategory.status === "Active" || subcategory.status === "active" ? "inactive" : "active";
+      const newStatus = subcategory.status === "active" ? "inactive" : "active";
       const response = await fetch(`${baseurl}${routes.toggleSubCategoryStatus(id)}`, {
         method: "PUT",
         headers: {
@@ -103,9 +122,7 @@ const Subcategories = () => {
         body: JSON.stringify({ status: newStatus }),
       });
 
-      if (!response.ok) {
-        throw new Error("Failed to toggle subcategory status");
-      }
+      if (!response.ok) throw new Error("Failed to toggle subcategory status");
 
       const updatedSubcategory = await response.json();
       setSubcategories((prev) =>
@@ -113,20 +130,17 @@ const Subcategories = () => {
           sub._id === id ? { ...sub, status: updatedSubcategory.status } : sub
         )
       );
-
       toast.success("Subcategory status updated successfully");
     } catch (error) {
       toast.error(error.message);
     }
   };
 
-  // Edit subcategory
   const handleEdit = (subcategory: Subcategory) => {
     setEditingId(subcategory._id);
     setEditName(subcategory.name);
   };
 
-  // Save edited subcategory
   const handleSaveEdit = async (id: string) => {
     try {
       const response = await fetch(`${baseurl}${routes.editSubCategory(id)}`, {
@@ -138,9 +152,7 @@ const Subcategories = () => {
         body: JSON.stringify({ name: editName }),
       });
 
-      if (!response.ok) {
-        throw new Error("Failed to update subcategory");
-      }
+      if (!response.ok) throw new Error("Failed to update subcategory");
 
       const updatedSubcategory = await response.json();
       setSubcategories((prev) =>
@@ -148,7 +160,6 @@ const Subcategories = () => {
           sub._id === id ? { ...sub, name: updatedSubcategory.name } : sub
         )
       );
-
       setEditingId(null);
       setEditName("");
       toast.success("Subcategory updated successfully");
@@ -157,36 +168,55 @@ const Subcategories = () => {
     }
   };
 
-  // Delete subcategory
   const handleDelete = (id: string) => {
     setDeletingId(id);
   };
 
-  // Confirm delete subcategory
   const confirmDelete = async () => {
-    if (deletingId) {
-      try {
-        const response = await fetch(`${baseurl}${routes.deleteSubCategory(deletingId)}`, {
-          method: "DELETE",
-          headers: {
-            Authorization: `Bearer ${localStorage.getItem("token")}`,
-          },
-        });
+    if (!deletingId) return;
 
-        if (!response.ok) {
-          throw new Error("Failed to delete subcategory");
+    try {
+      console.log("Attempting to delete subcategory:", deletingId);
+      const response = await fetch(`${baseurl}${routes.deleteSubCategory(deletingId)}`, {
+        method: "DELETE",
+        headers: {
+          Authorization: `Bearer ${localStorage.getItem("token")}`,
+        },
+      });
+
+      console.log("Delete response status:", response.status);
+      const responseText = await response.text();
+      console.log("Delete response body:", responseText);
+
+      if (!response.ok) {
+        let errorData;
+        try {
+          errorData = JSON.parse(responseText);
+        } catch {
+          errorData = { error: responseText || "Unknown error" };
         }
+        console.log("Parsed delete error:", errorData);
 
-        setSubcategories((prev) => prev.filter((sub) => sub._id !== deletingId));
-        toast.success("Subcategory deleted successfully");
-        setDeletingId(null);
-      } catch (error) {
-        toast.error(error.message);
+        if (errorData.error === "Cannot delete subcategory with products. Remove products first.") {
+          const subcategory = subcategories.find((sub) => sub._id === deletingId);
+          setCannotDeleteProductCount(errorData.productCount ?? (subcategory ? subcategory.productCount : 0));
+          setShowCannotDelete(true);
+          setDeletingId(null);
+          return;
+        }
+        throw new Error(errorData.error || "Failed to delete subcategory");
       }
+
+      setSubcategories((prev) => prev.filter((sub) => sub._id !== deletingId));
+      toast.success("Subcategory deleted successfully");
+      setDeletingId(null);
+    } catch (error) {
+      console.error("Delete subcategory error:", error);
+      toast.error(error.message || "Failed to delete subcategory");
+      setDeletingId(null);
     }
   };
 
-  // Add new subcategory
   const handleAddSubcategory = async () => {
     if (!newSubcategory.name.trim() || !newSubcategory.categoryId) {
       toast.error("Please fill in all required fields");
@@ -202,23 +232,35 @@ const Subcategories = () => {
         },
         body: JSON.stringify({
           name: newSubcategory.name,
-          categoryId: newSubcategory.categoryId, // Use categoryId
-          // status:'active'
+          categoryId: newSubcategory.categoryId,
         }),
       });
 
       if (!response.ok) {
-        throw new Error("Failed to add subcategory");
+        const errorText = await response.text();
+        throw new Error(`Failed to add subcategory: ${errorText}`);
       }
 
       const newSubcategoryData = await response.json();
-      setSubcategories((prev) => [...prev, newSubcategoryData]);
+      console.log("Added subcategory:", newSubcategoryData);
+
+      // Re-fetch subcategories to get populated category data
+      await fetchSubcategories();
       setIsAddOpen(false);
       setNewSubcategory({ name: "", categoryId: "" });
       toast.success("Subcategory added successfully");
     } catch (error) {
-      toast.error(error.message);
+      console.error("Add subcategory error:", error);
+      toast.error(error.message || "Failed to add subcategory");
     }
+  };
+
+  const getCategoryName = (category: string | { _id: string; name: string }) => {
+    if (typeof category === "string") {
+      const cat = categories.find((c) => c._id === category);
+      return cat ? cat.name : "N/A";
+    }
+    return category.name || "N/A";
   };
 
   return (
@@ -239,9 +281,7 @@ const Subcategories = () => {
             <DialogContent className="sm:max-w-[425px] mx-4 md:mx-0">
               <DialogHeader>
                 <DialogTitle>Add New Subcategory</DialogTitle>
-                <DialogDescription>
-                  Create a new subcategory for your products
-                </DialogDescription>
+                <DialogDescription>Create a new subcategory for your products</DialogDescription>
               </DialogHeader>
               <div className="grid gap-4 py-4">
                 <div className="space-y-2">
@@ -249,9 +289,7 @@ const Subcategories = () => {
                   <Input
                     id="name"
                     value={newSubcategory.name}
-                    onChange={(e) =>
-                      setNewSubcategory({ ...newSubcategory, name: e.target.value })
-                    }
+                    onChange={(e) => setNewSubcategory({ ...newSubcategory, name: e.target.value })}
                     placeholder="Enter subcategory name"
                   />
                 </div>
@@ -261,12 +299,7 @@ const Subcategories = () => {
                     id="parentCategory"
                     className="w-full h-10 rounded-md border border-input bg-background px-3 py-2 text-sm"
                     value={newSubcategory.categoryId}
-                    onChange={(e) =>
-                      setNewSubcategory({
-                        ...newSubcategory,
-                        categoryId: e.target.value,
-                      })
-                    }
+                    onChange={(e) => setNewSubcategory({ ...newSubcategory, categoryId: e.target.value })}
                   >
                     <option value="">Select Parent Category</option>
                     {categories.map((category) => (
@@ -288,8 +321,8 @@ const Subcategories = () => {
             </DialogContent>
           </Dialog>
         </div>
- 
-  <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+
+        <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full min-w-[600px]">
               <thead>
@@ -339,9 +372,7 @@ const Subcategories = () => {
                         )}
                       </div>
                     </td>
-                    <td className="px-6 py-4 text-gray-600">
-                    {subcategory.category?.name || "N/A"}
-                      </td>
+                    <td className="px-6 py-4 text-gray-600">{getCategoryName(subcategory.category)}</td>
                     <td className="px-6 py-4 text-gray-600">{subcategory.productCount} products</td>
                     <td className="px-6 py-4">
                       <Button
@@ -350,29 +381,20 @@ const Subcategories = () => {
                         onClick={() => handleStatusToggle(subcategory._id)}
                         className={cn(
                           "px-3 py-1 rounded-full text-sm font-medium",
-                          subcategory.status === "Active" ||
                           subcategory.status === "active"
                             ? "bg-green-100 text-green-700 hover:bg-green-200"
                             : "bg-red-100 text-red-700 hover:bg-red-200"
                         )}
                       >
-                      {subcategory?.status }
+                        {subcategory.status}
                       </Button>
                     </td>
                     <td className="px-6 py-4">
                       <div className="flex items-center gap-2">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => handleEdit(subcategory)}
-                        >
+                        <Button variant="ghost" size="sm" onClick={() => handleEdit(subcategory)}>
                           <Edit className="w-4 h-4" />
                         </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => handleDelete(subcategory?._id)}
-                        >
+                        <Button variant="ghost" size="sm" onClick={() => handleDelete(subcategory._id)}>
                           <Trash2 className="w-4 h-4" />
                         </Button>
                       </div>
@@ -384,6 +406,7 @@ const Subcategories = () => {
           </div>
         </div>
 
+        {/* Confirmation Dialog */}
         <AlertDialog open={deletingId !== null} onOpenChange={() => setDeletingId(null)}>
           <AlertDialogContent className="mx-4 md:mx-0">
             <AlertDialogHeader>
@@ -398,6 +421,24 @@ const Subcategories = () => {
               </Button>
               <Button variant="destructive" onClick={confirmDelete} className="w-full sm:w-auto">
                 Delete
+              </Button>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+
+        {/* Cannot Delete Dialog */}
+        <AlertDialog open={showCannotDelete} onOpenChange={() => setShowCannotDelete(false)}>
+          <AlertDialogContent className="mx-4 md:mx-0">
+            <AlertDialogHeader>
+              <AlertDialogTitle>Cannot Delete Subcategory</AlertDialogTitle>
+              <AlertDialogDescription>
+                This subcategory contains {cannotDeleteProductCount} product(s). Please remove all products from the
+                subcategory before deleting it.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <Button variant="outline" onClick={() => setShowCannotDelete(false)} className="w-full sm:w-auto">
+                OK
               </Button>
             </AlertDialogFooter>
           </AlertDialogContent>

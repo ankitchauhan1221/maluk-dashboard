@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Plus, FolderTree, Edit, Trash2, X } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { useState, useEffect, ReactNode, Key } from "react";
+import { useState, useEffect } from "react";
 import { toast } from "sonner";
 import {
   AlertDialog,
@@ -22,103 +22,128 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
-import { baseurl, routes } from "../common/config"; // Import API routes
+import { baseurl, routes } from "../common/config";
 
 interface Category {
-  _id: Key;
-  subcategoryCount: ReactNode;
-  productCount: ReactNode;
-  id: number;
+  _id: string;
   name: string;
-  products: number;
-  status: "Active" | "Inactive";
-  subcategories: number;
+  productCount: number;
+  status: "active" | "inactive";
+  subcategoryCount: number;
 }
 
 const Categories = () => {
   const [categories, setCategories] = useState<Category[]>([]);
-  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
-  const [deletingId, setDeletingId] = useState<number | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const [isAddOpen, setIsAddOpen] = useState(false);
-  const [newCategory, setNewCategory] = useState({
-    name: "",
-  });
+  const [newCategory, setNewCategory] = useState({ name: "" });
+  const [showCannotDelete, setShowCannotDelete] = useState(false);
+  const [cannotDeleteProductCount, setCannotDeleteProductCount] = useState<number>(0);
+  const [cannotDeleteReason, setCannotDeleteReason] = useState<string>("");
+  const [isLoading, setIsLoading] = useState(true);
+  const [fetchError, setFetchError] = useState<string | null>(null);
+
+  const fetchCategories = async () => {
+    setIsLoading(true);
+    setFetchError(null);
+    try {
+      const token = localStorage.getItem("token");
+      console.log("Fetching categories with token:", token ? "Present" : "Missing");
+      console.log("Request URL:", `${baseurl}${routes.getCategories}`);
+
+      if (!token) {
+        throw new Error("No authentication token found. Please log in.");
+      }
+
+      const response = await fetch(`${baseurl}${routes.getCategories}`, {
+        method: "GET",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+      });
+
+      console.log("Fetch categories response status:", response.status);
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error("Fetch error response:", errorText);
+        throw new Error(`Failed to fetch categories: ${response.status} - ${errorText || response.statusText}`);
+      }
+
+      const data = await response.json();
+      console.log("Fetched categories data:", data);
+
+      if (!Array.isArray(data)) {
+        console.error("Expected an array, got:", data);
+        throw new Error("Invalid data format: Expected an array of categories");
+      }
+
+      setCategories(data);
+    } catch (error) {
+      const errorMessage = error.message.includes("Failed to fetch")
+        ? "Cannot connect to the server. Please ensure it’s running on localhost:5000."
+        : error.message || "Failed to fetch categories";
+      console.error("Fetch categories error:", error);
+      toast.error(errorMessage);
+      setFetchError(errorMessage);
+      setCategories([]);
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   useEffect(() => {
-    const fetchCategories = async () => {
-      try {
-        const response = await fetch(`${baseurl}${routes.getCategories}`, {
-          method: "GET",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${localStorage.getItem("token")}`,
-          },
-        });
-
-        if (!response.ok) {
-          throw new Error("Failed to fetch categories");
-        }
-
-        const data = await response.json();
-        setCategories(data);
-      } catch (error) {
-        toast.error(error.message);
-      }
-    };
-
     fetchCategories();
+
+    const handleProductDeleted = () => {
+      console.log("Product deleted event received, re-fetching categories");
+      fetchCategories();
+    };
+    window.addEventListener("productDeleted", handleProductDeleted);
+
+    return () => {
+      window.removeEventListener("productDeleted", handleProductDeleted);
+    };
   }, []);
 
   const handleStatusToggle = async (id: string) => {
     try {
-      // Find the current category to determine the new status
       const category = categories.find((cat) => cat._id === id);
-      if (!category) {
-        throw new Error("Category not found");
-      }
+      if (!category) throw new Error("Category not found");
 
-      // Convert status to lowercase for consistent comparison
-      const currentStatus = category.status.toLowerCase();
-      const newStatus = currentStatus === "active" ? "inactive" : "active";
-
-      // Send the request with the new status in the body
+      const newStatus = category.status === "active" ? "inactive" : "active";
       const response = await fetch(`${baseurl}${routes.toggleCategoryStatus(id)}`, {
         method: "PUT",
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${localStorage.getItem("token")}`,
         },
-        body: JSON.stringify({ status: newStatus }), // Ensure correct status format
+        body: JSON.stringify({ status: newStatus }),
       });
 
-      if (!response.ok) {
-        throw new Error("Failed to toggle category status");
-      }
+      if (!response.ok) throw new Error("Failed to toggle category status");
 
       const updatedCategory = await response.json();
-      console.log("Updated Category:", updatedCategory);
-
-      // Update the state with the new category status
       setCategories((prevCategories) =>
         prevCategories.map((cat) =>
           cat._id === id ? { ...cat, status: updatedCategory.status } : cat
         )
       );
-
       toast.success("Category status updated successfully");
     } catch (error) {
-      toast.error(error.message);
+      toast.error(error.message || "Failed to toggle status");
     }
   };
-
 
   const handleEdit = (category: Category) => {
     setEditingId(category._id);
     setEditName(category.name);
   };
 
-  const handleSaveEdit = async (id: number) => {
+  const handleSaveEdit = async (id: string) => {
     try {
       const response = await fetch(`${baseurl}${routes.editCategory(id)}`, {
         method: "PUT",
@@ -129,54 +154,81 @@ const Categories = () => {
         body: JSON.stringify({ name: editName }),
       });
 
-      if (!response.ok) {
-        throw new Error("Failed to update category");
-      }
+      if (!response.ok) throw new Error("Failed to update category");
 
       const updatedCategory = await response.json();
-
       setCategories((prevCategories) =>
         prevCategories.map((category) =>
           category._id === id ? updatedCategory : category
         )
       );
-
       setEditingId(null);
       setEditName("");
       toast.success("Category name updated successfully");
     } catch (error) {
-      toast.error(error.message);
+      toast.error(error.message || "Failed to update category");
     }
   };
 
-  const handleDelete = (id: number) => {
+  const handleDelete = (id: string) => {
     setDeletingId(id);
   };
 
   const confirmDelete = async () => {
-    if (deletingId) {
-      try {
-        const response = await fetch(`${baseurl}${routes.deleteCategory(deletingId)}`, {
-          method: "DELETE",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${localStorage.getItem("token")}`,
-          },
-        });
+    if (!deletingId) return;
 
-        if (!response.ok) {
-          throw new Error("Failed to delete category");
+    try {
+      console.log("Attempting to delete category:", deletingId);
+      const token = localStorage.getItem("token");
+      console.log("Token for DELETE request:", token ? "Present" : "Missing");
+
+      const response = await fetch(`${baseurl}${routes.deleteCategory(deletingId)}`, {
+        method: "DELETE",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+      });
+
+      console.log("Delete response status:", response.status);
+      const responseText = await response.text();
+      console.log("Delete response body:", responseText);
+
+      if (!response.ok) {
+        let errorData;
+        try {
+          errorData = JSON.parse(responseText);
+        } catch {
+          errorData = { error: responseText || "Unknown error" };
         }
+        console.log("Parsed delete error:", errorData);
 
-        setCategories((prevCategories) =>
-          prevCategories.filter((category) => category._id !== deletingId)
-        );
-
-        toast.success("Category deleted successfully");
-        setDeletingId(null);
-      } catch (error) {
-        toast.error(error.message);
+        if (
+          errorData.error === "Cannot delete category with products. Remove products first." ||
+          errorData.error === "Cannot delete category because a subcategory contains products. Remove products first."
+        ) {
+          const category = categories.find((cat) => cat._id === deletingId);
+          setCannotDeleteProductCount(category ? category.productCount : 0);
+          setCannotDeleteReason(errorData.error);
+          setShowCannotDelete(true);
+          setDeletingId(null);
+          return;
+        }
+        throw new Error(errorData.error || `Failed to delete category: ${response.status} - ${responseText}`);
       }
+
+      setCategories((prevCategories) =>
+        prevCategories.filter((category) => category._id !== deletingId)
+      );
+      toast.success("Category and its subcategories deleted successfully");
+      setDeletingId(null);
+    } catch (error) {
+      console.error("Delete category error:", error);
+      const errorMessage = error.message.includes("Failed to fetch")
+        ? "Cannot connect to the server. Please ensure it’s running on localhost:5000."
+        : error.message || "Failed to delete category";
+      toast.error(errorMessage);
+      setDeletingId(null);
     }
   };
 
@@ -193,23 +245,18 @@ const Categories = () => {
           "Content-Type": "application/json",
           Authorization: `Bearer ${localStorage.getItem("token")}`,
         },
-        body: JSON.stringify({
-          name: newCategory.name,
-        }),
+        body: JSON.stringify({ name: newCategory.name }),
       });
 
-      if (!response.ok) {
-        throw new Error("Failed to add category");
-      }
+      if (!response.ok) throw new Error("Failed to add category");
 
       const data = await response.json();
-
       const newCategoryData: Category = {
-        id: data.id, // Assuming the response includes the new category ID
+        _id: data._id,
         name: data.name,
-        products: 0,
+        productCount: 0,
         status: "active",
-        subcategories: 0,
+        subcategoryCount: 0,
       };
 
       setCategories([...categories, newCategoryData]);
@@ -217,8 +264,7 @@ const Categories = () => {
       setNewCategory({ name: "" });
       toast.success("Category added successfully");
     } catch (error) {
-      console.error("Error adding category:", error);
-      toast.error("Failed to add category");
+      toast.error(error.message || "Failed to add category");
     }
   };
 
@@ -240,9 +286,7 @@ const Categories = () => {
             <DialogContent className="sm:max-w-[425px] mx-4 md:mx-0">
               <DialogHeader>
                 <DialogTitle>Add New Category</DialogTitle>
-                <DialogDescription>
-                  Create a new category for your products
-                </DialogDescription>
+                <DialogDescription>Create a new category for your products</DialogDescription>
               </DialogHeader>
               <div className="grid gap-4 py-4">
                 <div className="space-y-2">
@@ -250,9 +294,7 @@ const Categories = () => {
                   <Input
                     id="name"
                     value={newCategory.name}
-                    onChange={(e) =>
-                      setNewCategory({ ...newCategory, name: e.target.value })
-                    }
+                    onChange={(e) => setNewCategory({ ...newCategory, name: e.target.value })}
                     placeholder="Enter category name"
                   />
                 </div>
@@ -267,96 +309,109 @@ const Categories = () => {
           </Dialog>
         </div>
 
-        <div className="grid gap-4 md:gap-6">
-          {categories.map((category) => (
-            <div
-              key={category._id}
-              className="bg-white rounded-xl shadow-sm border border-gray-100 p-4 md:p-6"
-            >
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                <div className="flex items-center gap-4">
-                  <div className="w-12 h-12 bg-secondary rounded-lg flex items-center justify-center shrink-0">
-                    <FolderTree className="w-6 h-6 text-primary" />
-                  </div>
-                  <div>
-                    {editingId === category._id ? (
-                      <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2">
-                        <Input
-                          value={editName}
-                          onChange={(e) => setEditName(e.target.value)}
-                          className="h-8 w-full sm:w-[200px]"
-                        />
-                        <div className="flex items-center gap-2 w-full sm:w-auto">
-                          <Button
-                            size="sm"
-                            onClick={() => handleSaveEdit(category?._id)}
-                            className="h-8 w-full sm:w-auto"
-                          >
-                            Save
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            onClick={() => setEditingId(null)}
-                            className="h-8"
-                          >
-                            <X className="w-4 h-4" />
-                          </Button>
+        {isLoading ? (
+          <div className="text-center text-gray-600">Loading categories...</div>
+        ) : fetchError ? (
+          <div className="text-center text-red-600">
+            {fetchError}
+            <Button variant="link" onClick={fetchCategories} className="mt-2">
+              Retry
+            </Button>
+          </div>
+        ) : categories.length === 0 ? (
+          <div className="text-center text-gray-600">No categories found</div>
+        ) : (
+          <div className="grid gap-4 md:gap-6">
+            {categories.map((category) => (
+              <div
+                key={category._id}
+                className="bg-white rounded-xl shadow-sm border border-gray-100 p-4 md:p-6"
+              >
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                  <div className="flex items-center gap-4">
+                    <div className="w-12 h-12 bg-secondary rounded-lg flex items-center justify-center shrink-0">
+                      <FolderTree className="w-6 h-6 text-primary" />
+                    </div>
+                    <div>
+                      {editingId === category._id ? (
+                        <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2">
+                          <Input
+                            value={editName}
+                            onChange={(e) => setEditName(e.target.value)}
+                            className="h-8 w-full sm:w-[200px]"
+                          />
+                          <div className="flex items-center gap-2 w-full sm:w-auto">
+                            <Button
+                              size="sm"
+                              onClick={() => handleSaveEdit(category._id)}
+                              className="h-8 w-full sm:w-auto"
+                            >
+                              Save
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => setEditingId(null)}
+                              className="h-8"
+                            >
+                              <X className="w-4 h-4" />
+                            </Button>
+                          </div>
                         </div>
-                      </div>
-                    ) : (
-                      <h3 className="font-semibold text-lg">{category.name}</h3>
-                    )}
-                    <p className="text-sm text-gray-600">
-                      {category.productCount} products • {category.subcategoryCount} subcategories
-                    </p>
+                      ) : (
+                        <h3 className="font-semibold text-lg">{category.name}</h3>
+                      )}
+                      <p className="text-sm text-gray-600">
+                        {category.productCount} products • {category.subcategoryCount} subcategories
+                      </p>
+                    </div>
                   </div>
-                </div>
-                <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => handleStatusToggle(category?._id)}
-                    className={cn(
-                      "px-3 py-1 rounded-full text-sm font-medium w-full sm:w-auto justify-center",
-                      category.status.toLowerCase() === "active"
-                        ? "bg-green-100 text-green-700 hover:bg-green-200"
-                        : "bg-red-100 text-red-700 hover:bg-red-200"
-                    )}
-                  >
-                    {category.status}
-                  </Button>
-
-                  <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
+                  <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4">
                     <Button
                       variant="ghost"
                       size="sm"
-                      onClick={() => handleEdit(category)}
-                      className="w-full sm:w-auto"
+                      onClick={() => handleStatusToggle(category._id)}
+                      className={cn(
+                        "px-3 py-1 rounded-full text-sm font-medium w-full sm:w-auto justify-center",
+                        category.status === "active"
+                          ? "bg-green-100 text-green-700 hover:bg-green-200"
+                          : "bg-red-100 text-red-700 hover:bg-red-200"
+                      )}
                     >
-                      <Edit className="w-4 h-4" />
+                      {category.status}
                     </Button>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => handleDelete(category?._id)}
-                      className="w-full sm:w-auto"
-                    >
-                      <Trash2 className="w-4 h-4"/>
-                    </Button>
+                    <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => handleEdit(category)}
+                        className="w-full sm:w-auto"
+                      >
+                        <Edit className="w-4 h-4" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => handleDelete(category._id)}
+                        className="w-full sm:w-auto"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </Button>
+                    </div>
                   </div>
                 </div>
               </div>
-            </div>
-          ))}
-        </div>
+            ))}
+          </div>
+        )}
 
+        {/* Confirmation Dialog */}
         <AlertDialog open={deletingId !== null} onOpenChange={() => setDeletingId(null)}>
           <AlertDialogContent className="mx-4 md:mx-0">
             <AlertDialogHeader>
               <AlertDialogTitle>Are you absolutely sure?</AlertDialogTitle>
               <AlertDialogDescription>
-                This action cannot be undone. This will permanently delete the category.
+                This action cannot be undone. This will permanently delete the category and all its subcategories.
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter className="flex-col sm:flex-row gap-2">
@@ -365,6 +420,25 @@ const Categories = () => {
               </Button>
               <Button variant="destructive" onClick={confirmDelete} className="w-full sm:w-auto">
                 Delete
+              </Button>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+
+        {/* Cannot Delete Dialog */}
+        <AlertDialog open={showCannotDelete} onOpenChange={() => setShowCannotDelete(false)}>
+          <AlertDialogContent className="mx-4 md:mx-0">
+            <AlertDialogHeader>
+              <AlertDialogTitle>Cannot Delete Category</AlertDialogTitle>
+              <AlertDialogDescription>
+                {cannotDeleteReason === "Cannot delete category with products. Remove products first."
+                  ? `This category contains ${cannotDeleteProductCount} product(s). Please remove all products from the category before deleting it.`
+                  : "A subcategory under this category contains products. Please remove all products from the subcategories before deleting the category."}
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <Button variant="outline" onClick={() => setShowCannotDelete(false)} className="w-full sm:w-auto">
+                OK
               </Button>
             </AlertDialogFooter>
           </AlertDialogContent>
